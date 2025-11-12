@@ -22,7 +22,7 @@ agent:
   lr_inner: 0.001
   lr_outer: 0.0003
   beta: 0.01
-  device: "cuda"            # or "cpu"
+  device: "cpu"            # or "cuda"
   hidden_dim: 128
   exploration: "bayesian"
 
