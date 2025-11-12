@@ -47,12 +47,40 @@ class BayesianAgent(BaseAgent):
         self.beta = beta  # KL regularization coefficient
 
     def act(self, state, evaluate=False):
-        state = torch.tensor(state, dtype=torch.float32).unsqueeze(0).to(self.device)
-        logits, _ = self.policy(state)
-        probs = torch.softmax(logits, dim=-1)
-        dist_action = dist.Categorical(probs)
-        action = dist_action.probs.argmax(dim=-1) if evaluate else dist_action.sample()
-        return action.item(), dist_action.log_prob(action)
+        """
+        Select an action based on current policy logits.
+        Exploration is automatically modulated by entropy:
+        high uncertainty -> softer sampling (more exploration),
+        low uncertainty -> greedy behavior (more exploitation).
+        """
+        state = torch.tensor(state, dtype=torch.float32).to(self.device)
+
+        # Some Bayesian networks return (mean, log_var)
+        logits_out = self.policy(state)
+        if isinstance(logits_out, tuple):
+            logits, _ = logits_out
+        else:
+            logits = logits_out
+
+        # Entropy of the base distribution
+        base_probs = torch.softmax(logits, dim=-1)
+        entropy = -torch.sum(base_probs * torch.log(base_probs + 1e-8)).item()
+
+        # 🔥 Entropy-weighted exploration
+        temperature = 1.0 + entropy  # high entropy → more exploration
+        scaled_logits = logits / temperature
+        probs = torch.softmax(scaled_logits, dim=-1)
+
+        dist = torch.distributions.Categorical(probs)
+        action = dist.sample()
+        log_prob = dist.log_prob(action)
+
+        if evaluate:
+            action = torch.argmax(probs)
+
+        return action.item(), log_prob, entropy
+
+
 
     def update(self, log_probs, rewards, old_means, old_logvars):
         """
