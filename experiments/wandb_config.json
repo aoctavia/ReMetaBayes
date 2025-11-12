@@ -1,0 +1,18 @@
+{
+  "project": "ReMetaBayes",
+  "entity": "aulia-octavia",
+  "notes": "Adaptive Reinforcement Learning with Bayesian Meta-Agent",
+  "tags": ["probabilistic-rl", "meta-learning", "non-stationary"],
+  "log_interval": 20,
+  "save_code": true,
+  "monitor_gym": false,
+  "track_gradients": true,
+  "config_defaults": {
+    "lr_inner": 0.001,
+    "lr_outer": 0.0003,
+    "beta": 0.01,
+    "hidden_dim": 128,
+    "shift_interval": 100,
+    "n_tasks": 5
+  }
+}

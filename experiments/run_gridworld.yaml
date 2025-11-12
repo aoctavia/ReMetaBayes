@@ -1,0 +1,39 @@
+# experiments/run_gridworld.yaml
+experiment:
+  name: "ReMetaBayes_GridWorldShift"
+  seed: 42
+  total_episodes: 1000
+  max_steps_per_episode: 50
+  log_interval: 20
+  eval_interval: 100
+  save_model: true
+
+environment:
+  name: "GridWorldShift"
+  size: 5
+  shift_interval: 100
+  reward_mode: "sparse"     # or "dense"
+  render: false
+
+agent:
+  type: "MetaAgent"
+  obs_dim: 25               # 5x5 grid flattened
+  action_dim: 4             # up, right, down, left
+  lr_inner: 0.001
+  lr_outer: 0.0003
+  beta: 0.01
+  device: "cuda"            # or "cpu"
+  hidden_dim: 128
+  exploration: "bayesian"
+
+meta_learning:
+  n_tasks: 5                # meta-batch size
+  inner_steps: 1
+  outer_steps: 3
+  adaptation_episodes: 2
+
+logging:
+  use_wandb: true
+  project: "ReMetaBayes"
+  entity: "aulia-octavia"
+  save_path: "results/gridworld/"

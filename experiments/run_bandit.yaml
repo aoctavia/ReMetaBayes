@@ -1,0 +1,35 @@
+# experiments/run_bandit.yaml
+experiment:
+  name: "ReMetaBayes_ContextualBandit"
+  seed: 123
+  total_episodes: 500
+  max_steps_per_episode: 1
+  log_interval: 10
+  eval_interval: 50
+  save_model: false
+
+environment:
+  name: "ContextualBandit"
+  n_actions: 5
+  n_contexts: 10
+  reward_shift_interval: 50
+  reward_noise_std: 0.05
+
+agent:
+  type: "BayesianAgent"
+  obs_dim: 10
+  action_dim: 5
+  lr: 0.0005
+  beta: 0.05
+  hidden_dim: 64
+  exploration: "thompson"     # could be "ucb" or "epsilon"
+
+evaluation:
+  n_eval_episodes: 50
+  metric: "average_reward"
+
+logging:
+  use_wandb: true
+  project: "ReMetaBayes"
+  entity: "aulia-octavia"
+  save_path: "results/bandit/"

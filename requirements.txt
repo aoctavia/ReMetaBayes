@@ -1,0 +1,9 @@
+torch>=2.0.0
+torchvision
+numpy
+matplotlib
+seaborn
+pandas
+pyyaml
+gymnasium==0.29.1
+wandb

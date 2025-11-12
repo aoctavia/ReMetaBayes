@@ -1,0 +1,63 @@
+% core/theory/derivation.tex
+\documentclass[a4paper,11pt]{article}
+\usepackage{amsmath,amssymb,bm,geometry}
+\geometry{margin=2cm}
+\title{Theoretical Derivation: ReMetaBayes}
+\author{Aulia Octaviani}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section*{1. Problem Setting}
+
+We consider a reinforcement learning agent interacting with a non-stationary environment.
+At each time step $t$, the environment dynamics are parameterized by $\theta_t$, which evolves as:
+\[
+p(\theta_t \mid \theta_{t-1}) = \mathcal{N}(\theta_{t-1}, \sigma^2 I)
+\]
+The agent maintains a probabilistic belief $q(\theta_t)$ and updates it upon observing transitions $(s_t, a_t, r_t, s_{t+1})$.
+
+\section*{2. Bayesian Meta-Update}
+
+We define a Bayesian meta-update rule:
+\[
+q(\theta_t) \propto q(\theta_{t-1}) 
+\exp\Big[-\alpha \, \mathbb{E}_{(s,a,r)} [L(\pi_\phi(a|s), r)]\Big]
+\]
+where $L(\pi_\phi, r)$ is the expected loss under the policy $\pi_\phi(a|s)$.
+
+This formulation links the inner-loop gradient step of meta-learning to a probabilistic inference update.
+
+\section*{3. Adaptation Speed Bound}
+
+We define the adaptation speed $A$ as the inverse of the time required for $q(\theta_t)$ to converge after a shift.
+
+Using information geometry arguments, we obtain:
+\[
+A \le \frac{1}{\lambda} 
+\sqrt{\frac{2}{KL(q(\theta_t)\,||\,q(\theta_{t-1})) + \epsilon}}
+\]
+This bound connects learning rate $\lambda$ and information divergence between successive beliefs.
+
+\section*{4. Regret under Distribution Shifts}
+
+Let $\mathcal{R}_t$ be the instantaneous regret under environment $\theta_t$:
+\[
+\mathcal{R}_t = V^*(\theta_t) - V^{\pi_\phi}(\theta_t)
+\]
+For a sequence of $T$ shifts, the cumulative regret satisfies:
+\[
+\mathbb{E}\Big[\sum_{t=1}^T \mathcal{R}_t\Big] 
+\le C \sum_{t=1}^T \sqrt{KL(q(\theta_t)||q(\theta_{t-1}))}
+\]
+where $C$ is a constant related to task similarity.
+
+\section*{5. Discussion}
+
+The result indicates that minimizing the divergence between consecutive posteriors 
+reduces cumulative regret under non-stationary dynamics. 
+This provides a theoretical grounding for ReMetaBayes as a probabilistic 
+framework for autonomous adaptation.
+
+\end{document}
