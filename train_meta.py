@@ -1,185 +1,198 @@
 #!/usr/bin/env python3
 # =========================================================
-# ReMetaBayes — Training Script for Adaptive Meta-RL
-# Author: Aulia Octaviani
+# ReMetaBayes — Probabilistic Meta-RL Training Script
 # =========================================================
 
 import argparse
-import yaml
-import json
 import os
+
+import yaml
 from tqdm import trange
 
-import torch
 import numpy as np
+import torch
 
-# Import project modules
-from core.agents.meta_agent import MetaAgent
-from core.agents.bayesian_agent import BayesianAgent
 from core.envs.gridworld_shift import GridWorldShift
 from core.envs.contextual_bandit import ContextualBandit
 from core.utils.logger import Logger
-from core.utils.helpers import set_seed
-
-# =========================================================
-# 1️⃣ Load configuration
-# =========================================================
-def load_config(path):
-    with open(path, "r") as f:
-        cfg = yaml.safe_load(f)
-    return cfg
+from core.agents.meta_agent import MetaAgent
 
 
-# =========================================================
-# 2️⃣ Environment factory
-# =========================================================
-def make_env(env_cfg):
-    name = env_cfg.get("name", "GridWorldShift").lower()
+def make_env(env_cfg, seed_offset: int = 0):
+    name = env_cfg["name"].lower()
+    seed = env_cfg.get("seed", 0) + seed_offset
+
     if name == "gridworldshift":
-        env = GridWorldShift(size=env_cfg["size"],
-                             shift_interval=env_cfg["shift_interval"],
-                             seed=env_cfg.get("seed", None))
+        return GridWorldShift(
+            size=env_cfg.get("size", 5),
+            shift_interval=env_cfg.get("shift_interval", 100),
+            seed=seed,
+        )
     elif name == "contextualbandit":
-        env = ContextualBandit(n_actions=env_cfg["n_actions"],
-                               n_contexts=env_cfg["n_contexts"],
-                               reward_shift_interval=env_cfg["reward_shift_interval"],
-                               reward_noise_std=env_cfg["reward_noise_std"],
-                               seed=env_cfg.get("seed", None))
-    else:
-        raise ValueError(f"Unsupported environment: {name}")
-    return env
-
-
-# =========================================================
-# 3️⃣ Agent factory
-# =========================================================
-def make_agent(agent_cfg):
-    # Auto-detect device
-    DEVICE = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
-    device = agent_cfg.get("device", DEVICE)
-
-    agent_type = agent_cfg.get("type", "MetaAgent").lower()
-    obs_dim = agent_cfg["obs_dim"]
-    action_dim = agent_cfg["action_dim"]
-
-    if agent_type == "metaagent":
-        agent = MetaAgent(
-            obs_dim=obs_dim,
-            action_dim=action_dim,
-            lr_inner=agent_cfg["lr_inner"],
-            lr_outer=agent_cfg["lr_outer"],
-            beta=agent_cfg["beta"],
-            device=device
-        )
-    elif agent_type == "bayesianagent":
-        agent = BayesianAgent(
-            obs_dim=obs_dim,
-            action_dim=action_dim,
-            lr=agent_cfg["lr"],
-            beta=agent_cfg["beta"],
-            device=device
+        return ContextualBandit(
+            n_actions=env_cfg.get("n_actions", 5),
+            n_contexts=env_cfg.get("n_contexts", 10),
+            reward_shift_interval=env_cfg.get("reward_shift_interval", 50),
+            reward_noise_std=env_cfg.get("reward_noise_std", 0.05),
+            seed=seed,
         )
     else:
-        raise ValueError(f"Unsupported agent type: {agent_type}")
-
-    print(f"🧠 Using {agent_type} on device: {device}")
-    return agent
+        raise ValueError(f"Unknown environment name: {env_cfg['name']}")
 
 
-# =========================================================
-# 4️⃣ Run single episode
-# =========================================================
-def run_episode(env, agent, logger=None, episode_idx=None, max_steps=50, evaluate=False):
+def get_obs_dim(env, env_cfg):
     state = env.reset()
-    total_reward = 0
-    log_probs, rewards = [], []
-    uncertainties = []
+    return int(np.array(state).shape[-1])
 
-    for _ in range(max_steps):
-        # === support 2 or 3 outputs depending on agent ===
-        result = agent.act(state, evaluate=evaluate)
-        if len(result) == 3:
-            action, log_prob, entropy = result
-        else:
-            action, log_prob = result
-            entropy = 0.0
 
+def collect_trajectory(env, agent, max_steps: int):
+    """
+    Roll out one episode (or fixed horizon if env has no terminal) tanpa z eksplisit.
+    z akan di-infer di dalam MetaAgent.meta_update() dari support.
+    """
+    states, actions, rewards = [], [], []
+
+    state = env.reset()
+    done = False
+    step = 0
+
+    while step < max_steps and not done:
+        action, logp, entropy = agent.act(state)  # z=None
         next_state, reward, done, _ = env.step(action)
-        total_reward += reward
-        log_probs.append(log_prob)
-        rewards.append(reward)
-        uncertainties.append(entropy)
+
+        states.append(np.array(state, dtype=np.float32))
+        actions.append(int(action))
+        rewards.append(float(reward))
+
         state = next_state
-        if done:
-            break
+        step += 1
 
-    # Optional simple policy update (for BayesianAgent)
-    if not evaluate and hasattr(agent, "update"):
-        old_means, old_logvars = torch.zeros(1), torch.zeros(1)
-        agent.update(torch.stack(log_probs), rewards, old_means, old_logvars)
+    states_t = torch.tensor(np.stack(states, axis=0), dtype=torch.float32)
+    actions_t = torch.tensor(actions, dtype=torch.long)
+    rewards_t = torch.tensor(rewards, dtype=torch.float32)
 
-    # Log episode-level results
-    if logger is not None and episode_idx is not None:
-        mean_entropy = float(np.mean(uncertainties)) if len(uncertainties) > 0 else 0
-        logger.log(episode_idx, total_reward, uncertainty=mean_entropy)
-        # Log temperature evolution (optional)
-        if hasattr(agent, "temperature"):
-            logger.log_extra("temperature", agent.temperature)
+    return {
+        "states": states_t,
+        "actions": actions_t,
+        "rewards": rewards_t,
+        "total_reward": float(sum(rewards)),
+    }
 
 
-    return total_reward
+def train(config_path: str):
+    # 1) Load config
+    with open(config_path, "r") as f:
+        cfg = yaml.safe_load(f)
 
+    exp_cfg = cfg["experiment"]
+    env_cfg = cfg["environment"]
+    agent_cfg = cfg["agent"]
+    meta_cfg = cfg["meta_learning"]
+    log_cfg = cfg.get("logging", {})
 
-# =========================================================
-# 5️⃣ Training loop
-# =========================================================
-def train(cfg_path):
-    # --- Load configuration ---
-    cfg = load_config(cfg_path)
-    set_seed(cfg["experiment"]["seed"])
+    seed = exp_cfg.get("seed", 0)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
 
-    # --- Setup environment ---
-    env = make_env(cfg["environment"])
+    # 2) env prototype → obs_dim
+    env_proto = make_env(env_cfg, seed_offset=0)
+    obs_dim = get_obs_dim(env_proto, env_cfg)
+    if env_cfg["name"].lower() == "contextualbandit":
+        action_dim = env_cfg.get("n_actions", 5)
+    else:
+        action_dim = 4  # GridWorldShift: up/right/down/left
+    del env_proto
 
-    # --- Setup agent ---
-    agent = make_agent(cfg["agent"])
-    logger = Logger(log_dir=cfg["logging"]["save_path"])
+    # 3) MetaAgent
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    agent = MetaAgent(
+        obs_dim=obs_dim,
+        action_dim=action_dim,
+        latent_dim=agent_cfg.get("latent_dim", 16),
+        hidden_dim=agent_cfg.get("hidden_dim", 128),
+        lr=agent_cfg.get("lr", 3e-4),
+        beta_kl=agent_cfg.get("beta_kl", 1e-3),
+        beta_kl_z=meta_cfg.get("beta_kl_z", 1e-3),
+        gamma=agent_cfg.get("gamma", 0.99),
+        device=device,
+    )
 
-    total_episodes = cfg["experiment"]["total_episodes"]
-    max_steps = cfg["experiment"]["max_steps_per_episode"]
-    eval_interval = cfg["experiment"]["eval_interval"]
+    # 4) Logger
+    save_path = log_cfg.get("save_path", "results/")
+    os.makedirs(save_path, exist_ok=True)
+    logger = Logger(log_dir=save_path, filename=f"{exp_cfg['name']}_metrics.json")
 
-    print(f"🚀 Starting training for {total_episodes} episodes on {env.__class__.__name__}...")
+    total_meta_iters = exp_cfg.get("total_episodes", 1000)
+    max_steps_per_episode = exp_cfg.get("max_steps_per_episode", 50)
 
-    # --- Main training loop ---
-    for episode in trange(total_episodes, desc="Training"):
-        run_episode(env, agent, logger=logger, episode_idx=episode, max_steps=max_steps)
+    n_tasks = meta_cfg.get("n_tasks", 5)
+    adaptation_episodes = meta_cfg.get("adaptation_episodes", 2)
 
-        # Optional evaluation
-        if (episode + 1) % eval_interval == 0:
-            eval_reward = np.mean([
-                run_episode(env, agent, max_steps=max_steps, evaluate=True)
-                for _ in range(5)
-            ])
-            print(f"Episode {episode+1}/{total_episodes} | Eval Reward: {eval_reward:.3f}")
+    print(f"🚀 Starting probabilistic meta-training for {total_meta_iters} iterations on {env_cfg['name']}")
 
-        # Save periodically
-        if (episode + 1) % cfg["experiment"]["log_interval"] == 0:
-            logger.save()
+    for meta_iter in trange(total_meta_iters, desc="Meta-iter"):
+        tasks = []
+        mean_query_return = 0.0
 
-    # --- Final save ---
+        for task_idx in range(n_tasks):
+            env = make_env(env_cfg, seed_offset=meta_iter * 1000 + task_idx * 10)
+
+            # 1) support trajectories
+            support_trajs = []
+            for _ in range(adaptation_episodes):
+                traj = collect_trajectory(env, agent, max_steps_per_episode)
+                support_trajs.append(traj)
+
+            support_states = torch.cat([t["states"] for t in support_trajs], dim=0)
+            support_actions = torch.cat([t["actions"] for t in support_trajs], dim=0)
+            support_rewards = torch.cat([t["rewards"] for t in support_trajs], dim=0)
+
+            support = {
+                "states": support_states,
+                "actions": support_actions,
+                "rewards": support_rewards,
+            }
+
+            # 2) query trajectory
+            query_traj = collect_trajectory(env, agent, max_steps_per_episode)
+            query = {
+                "states": query_traj["states"],
+                "actions": query_traj["actions"],
+                "rewards": query_traj["rewards"],
+            }
+            mean_query_return += query_traj["total_reward"] / float(n_tasks)
+
+            tasks.append({"support": support, "query": query})
+
+        # 3) meta-update
+        info = agent.meta_update(tasks)
+
+        # 4) log
+        logger.log(
+            episode=meta_iter,
+            reward=mean_query_return,
+            uncertainty=None,
+            kl=None,  # bisa diperluas untuk log KL z
+        )
+
+        if (meta_iter + 1) % exp_cfg.get("log_interval", 20) == 0:
+            print(
+                f"[Iter {meta_iter+1}] "
+                f"mean_query_return={mean_query_return:.2f} "
+                f"meta_loss={info['meta_loss']:.4f}"
+            )
+
     logger.save()
     print(f"✅ Training complete. Metrics saved to {logger.path}")
 
 
-# =========================================================
-# 6️⃣ Entry point
-# =========================================================
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train ReMetaBayes Meta-Agent")
-    parser.add_argument("--config", type=str, default="experiments/run_gridworld.yaml",
-                        help="Path to YAML configuration file")
+    parser = argparse.ArgumentParser(description="Train ReMetaBayes Probabilistic Meta-RL Agent")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="experiments/run_gridworld.yaml",
+        help="Path to YAML configuration file",
+    )
     args = parser.parse_args()
-
-    os.makedirs("results/", exist_ok=True)
     train(args.config)
