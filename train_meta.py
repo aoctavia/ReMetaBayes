@@ -48,7 +48,7 @@ def make_env(env_cfg, seed_offset=0):
 
 
 # =========================================================
-# GET OBSERVATION DIMENSION
+# OBSERVATION DIMENSION
 # =========================================================
 def get_obs_dim(env):
     state = env.reset()
@@ -56,7 +56,7 @@ def get_obs_dim(env):
 
 
 # =========================================================
-# TRAJECTORY COLLECTION
+# COLLECT TRAJECTORY
 # =========================================================
 def collect_trajectory(env, agent, max_steps, z=None):
     states, actions, rewards = [], [], []
@@ -88,7 +88,7 @@ def collect_trajectory(env, agent, max_steps, z=None):
 # TRAINING LOOP
 # =========================================================
 def train(config_path: str):
-    # load config
+    # Load config
     with open(config_path, "r") as f:
         cfg = yaml.safe_load(f)
 
@@ -102,23 +102,24 @@ def train(config_path: str):
     np.random.seed(seed)
     torch.manual_seed(seed)
 
-    # ===============================================
-    # PROTOTYPE ENV FOR DIMENSIONS
-    # ===============================================
-    first_family = env_cfg["task_families"][0]
-    env_proto = make_env(first_family)
+    # ------------------------------------------------------
+    # PROTOTYPE ENV FOR DIMENSION
+    # ------------------------------------------------------
+    proto_family = env_cfg["task_families"][0]
+    env_proto = make_env(proto_family)
+
     obs_dim = get_obs_dim(env_proto)
+
+    if proto_family["name"].lower() == "contextualbandit":
+        action_dim = proto_family.get("n_actions", 5)
+    else:
+        action_dim = 4  # 4 directions
+
     del env_proto
 
-    # determine action space
-    if first_family["name"].lower() == "contextualbandit":
-        action_dim = first_family.get("n_actions", 5)
-    else:
-        action_dim = 4  # GridWorldShift uses 4 actions
-
-    # ===============================================
+    # ------------------------------------------------------
     # META AGENT
-    # ===============================================
+    # ------------------------------------------------------
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     agent = MetaAgent(
@@ -133,9 +134,9 @@ def train(config_path: str):
         device=device,
     )
 
-    # ===============================================
+    # ------------------------------------------------------
     # LOGGER
-    # ===============================================
+    # ------------------------------------------------------
     save_path = log_cfg.get("save_path", "results_meta/")
     os.makedirs(save_path, exist_ok=True)
     logger = Logger(log_dir=save_path, filename=f"{exp_cfg['name']}_metrics.json")
@@ -147,43 +148,39 @@ def train(config_path: str):
 
     print(f"🚀 Starting probabilistic meta-training for {total_meta_iters} iterations")
 
-    # ===============================================
-    # META-TRAINING LOOP
-    # ===============================================
+    # ------------------------------------------------------
+    # META LOOP
+    # ------------------------------------------------------
     for meta_iter in trange(total_meta_iters, desc="Meta-iter"):
         tasks = []
         mean_query_return = 0.0
 
         for task_idx in range(n_tasks):
-
-            # PICK A RANDOM TASK FAMILY
+            # PICK RANDOM TASK FAMILY
             family_cfg = dict(np.random.choice(env_cfg["task_families"]))
 
-            env = make_env(
-                family_cfg,
-                seed_offset=meta_iter * 1000 + task_idx * 10
-            )
+            env = make_env(family_cfg, seed_offset=meta_iter * 1000 + task_idx * 10)
 
-            # SUPPORT SET (ADAPTATION)
+            # ----------------------
+            # SUPPORT (ADAPTATION)
+            # ----------------------
             support_trajs = []
             for _ in range(adaptation_episodes):
                 traj = collect_trajectory(env, agent, max_steps, z=None)
                 support_trajs.append(traj)
 
-            support_states = torch.cat([t["states"] for t in support_trajs])
-            support_actions = torch.cat([t["actions"] for t in support_trajs])
-            support_rewards = torch.cat([t["rewards"] for t in support_trajs])
-
             support = {
-                "states": support_states,
-                "actions": support_actions,
-                "rewards": support_rewards,
+                "states": torch.cat([t["states"] for t in support_trajs]),
+                "actions": torch.cat([t["actions"] for t in support_trajs]),
+                "rewards": torch.cat([t["rewards"] for t in support_trajs]),
             }
 
-            # INFER Z
+            # Infer z from support
             z_mean, z_logvar, z = agent.encode_support(support)
 
-            # QUERY TRAJECTORY
+            # ----------------------
+            # QUERY
+            # ----------------------
             query_traj = collect_trajectory(env, agent, max_steps, z=z)
             mean_query_return += query_traj["total_reward"] / n_tasks
 
@@ -195,12 +192,19 @@ def train(config_path: str):
 
             tasks.append({"support": support, "query": query})
 
-        # META-UPDATE
+        # ----------------------
+        # META UPDATE
+        # ----------------------
         info = agent.meta_update(tasks)
 
+        # ----------------------
+        # LOGGING
+        # ----------------------
         logger.log(
             episode=meta_iter,
-            reward=mean_query_return
+            reward=mean_query_return,
+            meta_loss=info["meta_loss"],
+            kl=info.get("kl_z", None)
         )
 
         if (meta_iter + 1) % exp_cfg.get("log_interval", 50) == 0:
