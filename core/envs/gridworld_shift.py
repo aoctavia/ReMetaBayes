@@ -1,62 +1,114 @@
 # core/envs/gridworld_shift.py
-# Sebuah simplified 2D GridWorld environment dengan reward map yang berubah secara berkala untuk mensimulasikan distribution shift.s
+# Clean + fixed + extended version for Probabilistic Meta-RL
+
 import numpy as np
+
 
 class GridWorldShift:
     """
-    Non-stationary GridWorld environment.
-    The reward map shifts after a fixed number of episodes.
+    Non-stationary 2D GridWorld.
+    Reward map shifts periodically to simulate distribution shift.
     """
 
-    def __init__(self, size=5, shift_interval=100, seed=None):
+    def __init__(
+        self,
+        size=5,
+        shift_interval=100,
+        reward_noise=0.0,
+        reward_scale=1.0,
+        max_steps=50,
+        seed=None,
+    ):
         self.size = size
-        self.state = (0, 0)
-        self.goal = (size - 1, size - 1)
         self.shift_interval = shift_interval
-        self.episode_count = 0
+        self.reward_noise = reward_noise
+        self.reward_scale = reward_scale
+        self.max_steps = max_steps
+
         self.rng = np.random.default_rng(seed)
+
+        # agent state
+        self.agent_pos = [0, 0]
+        self.steps = 0
+        self.episode_count = 0
+
+        # initialize map
         self._generate_reward_map()
 
+    # -----------------------------------------------------
+    # Reward Map Generation
+    # -----------------------------------------------------
     def _generate_reward_map(self):
-        """Generate reward landscape (changes after interval)."""
         self.reward_map = np.zeros((self.size, self.size))
-        goal_x, goal_y = self.goal
-        self.reward_map[goal_x, goal_y] = 1.0
-        # Add random perturbations
+        # assign goal reward
+        self.reward_map[self.size - 1, self.size - 1] = 1.0
+
+        # random negative zones
         for _ in range(self.size // 2):
-            x, y = self.rng.integers(0, self.size, 2)
-            self.reward_map[x, y] = self.rng.uniform(-1.0, 0.5)
+            y = self.rng.integers(0, self.size)
+            x = self.rng.integers(0, self.size)
+            self.reward_map[y, x] = self.rng.uniform(-1.0, 0.3)
 
     def _maybe_shift_reward(self):
-        if self.episode_count % self.shift_interval == 0 and self.episode_count > 0:
+        if self.episode_count > 0 and (self.episode_count % self.shift_interval == 0):
             self._generate_reward_map()
 
+    # -----------------------------------------------------
+    # Reset
+    # -----------------------------------------------------
     def reset(self):
-        """Reset agent position and possibly shift reward map."""
-        self.state = (0, 0)
+        self.agent_pos = [0, 0]
+        self.steps = 0
         self.episode_count += 1
         self._maybe_shift_reward()
         return self._encode_state()
 
+    # one-hot encode
     def _encode_state(self):
-        """Convert (x, y) to one-hot encoding."""
-        grid = np.zeros((self.size, self.size))
-        grid[self.state] = 1
+        """
+        Encode agent position into a FIXED 9x9 grid, regardless of env size.
+        """
+        MAX = 9  # maximum size used in your task families
+
+        grid = np.zeros((MAX, MAX))
+
+        # agent position inside its own size grid
+        y, x = self.agent_pos
+        grid[y, x] = 1
+
         return grid.flatten()
 
-    def step(self, action):
-        """0: up, 1: right, 2: down, 3: left"""
-        x, y = self.state
-        if action == 0 and x > 0:
-            x -= 1
-        elif action == 1 and y < self.size - 1:
-            y += 1
-        elif action == 2 and x < self.size - 1:
-            x += 1
-        elif action == 3 and y > 0:
-            y -= 1
-        self.state = (x, y)
 
-        reward = self.reward_map[x, y]
-        done = self.state == self.goal
-        return self._encode_state(), reward, done, {}
+    # -----------------------------------------------------
+    # Step Function
+    # -----------------------------------------------------
+    def step(self, action):
+        # move agent
+        if action == 0:      # up
+            self.agent_pos[0] = max(0, self.agent_pos[0] - 1)
+        elif action == 1:    # right
+            self.agent_pos[1] = min(self.size - 1, self.agent_pos[1] + 1)
+        elif action == 2:    # down
+            self.agent_pos[0] = min(self.size - 1, self.agent_pos[0] + 1)
+        elif action == 3:    # left
+            self.agent_pos[1] = max(0, self.agent_pos[1] - 1)
+
+        # base reward
+        y, x = self.agent_pos
+        reward = self.reward_map[y, x]
+
+        # apply scale
+        reward = reward * self.reward_scale
+
+        # apply reward noise
+        if self.reward_noise > 0:
+            reward += float(np.random.normal(0, self.reward_noise))
+
+        self.steps += 1
+        done = False
+
+        # end episode if limit reached
+        if self.steps >= self.max_steps:
+            done = True
+
+        return self._encode_state(), float(reward), done, {}

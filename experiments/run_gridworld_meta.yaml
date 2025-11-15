@@ -1,15 +1,15 @@
 experiment:
   name: remetabayes_meta
-  total_episodes: 5000
+  total_episodes: 100 #variasi ini
   max_steps_per_episode: 50
   seed: 42
   log_interval: 50
 
-environment:
-  name: gridworldshift
-  size: 5
-  shift_interval: 75
-  seed: 0
+# environment:
+#   name: gridworldshift
+#   size: 5
+#   shift_interval: 75
+#   seed: 0
 
 agent:
   latent_dim: 16
@@ -18,10 +18,29 @@ agent:
   beta_kl: 0.001
   gamma: 0.99
 
+# meta_learning:
+#   n_tasks: 5
+#   adaptation_episodes: 2
+#   beta_kl_z: 0.001
 meta_learning:
-  n_tasks: 5
+  n_tasks: 6
   adaptation_episodes: 2
-  beta_kl_z: 0.001
+  
+  task_families:
+    - { size: 5, shift_interval: 75 }
+    - { size: 7, shift_interval: 50 }
+    - { size: 5, shift_interval: 25, reward_noise: 0.3 }
+    - { size: 9, shift_interval: 100 }
+    - { size: 5, shift_interval: 75, reward_scale: 2.0 }
+
 
 logging:
   save_path: results_meta/
+
+environment:
+  task_families:
+    - { name: gridworldshift, size: 5, shift_interval: 75 }
+    - { name: gridworldshift, size: 7, shift_interval: 50 }
+    - { name: gridworldshift, size: 5, shift_interval: 25, reward_noise: 0.2 }
+    - { name: gridworldshift, size: 9, shift_interval: 100 }
+    - { name: gridworldshift, size: 5, shift_interval: 75, reward_scale: 2.0 }
