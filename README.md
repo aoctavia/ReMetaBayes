@@ -57,6 +57,17 @@ python train_meta.py --config experiments/run_gridworld.yaml
 python compare_entropy_effect.py
 ```
 
+there is new update and new command will be look like : 
+```
+rm results_meta/remetabayes_meta_metrics.json
+
+
+python train_meta.py --config experiments/run_gridworld_meta.yaml
+
+
+python plot_results.py
+```
+
 Artifacts are saved to:
 
 ```
